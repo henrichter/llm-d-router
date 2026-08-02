@@ -50,7 +50,11 @@ spec:
           imagePullPolicy: {{ $proxy.imagePullPolicy | default "IfNotPresent" }}
         {{- with $proxy.command }}
           command:
+          {{- if kindIs "string" . }}
             - {{ . | quote }}
+          {{- else }}
+          {{- toYaml . | nindent 12 }}
+          {{- end }}
         {{- end }}
         {{- with $proxy.args }}
           args:
@@ -101,6 +105,20 @@ spec:
         - name: epp
           image: {{ .Values.router.epp.image.registry }}/{{ .Values.router.epp.image.repository }}:{{ .Values.router.epp.image.tag }}
           imagePullPolicy: {{ .Values.router.epp.image.pullPolicy | default "IfNotPresent" }}
+        {{- with .Values.router.epp.command }}
+          command:
+          {{- if kindIs "string" . }}
+            - {{ . | quote }}
+          {{- else }}
+          {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.router.epp.args }}
+          args:
+          {{- range .Values.router.epp.args }}
+            - {{ . | quote }}
+          {{- end }}
+        {{- else }}
           args:
           {{- /* 1. Determine Mode Logic */ -}}
           {{- $useInferencePool := ne .Values.router.inferencePool.create false }}
@@ -136,9 +154,8 @@ spec:
           {{- if gt (.Values.router.epp.replicas | int) 1 }}
               - --ha-enable-leader-election
           {{- end }}
-          {{- $grpcHealthPort := .Values.router.epp.grpcHealthPort | default 9003 }}
               - --grpc-health-port
-              - "{{ $grpcHealthPort }}"
+              - "{{ .Values.router.epp.grpcHealthPort }}"
               # Pass additional flags via the router.epp.flags field in values.yaml.
               # Render them as --flag=value so boolean values are parsed correctly.
           {{- range $key, $value := $eppFlags }}
@@ -152,6 +169,7 @@ spec:
           {{- if not .Values.router.monitoring.prometheus.auth.enabled }}
               - --metrics-endpoint-auth=false
           {{- end }}
+        {{- end }}
           {{- with .Values.router.epp.resources }}
           resources:
             {{ toYaml . | nindent 12 }}
@@ -160,7 +178,7 @@ spec:
             - name: grpc
               containerPort: 9002
             - name: grpc-health
-              containerPort: {{ $grpcHealthPort }}
+              containerPort: {{ .Values.router.epp.grpcHealthPort }}
             - name: metrics
               containerPort: 9090
         {{- if .Values.router.epp.extraContainerPorts }}
@@ -169,11 +187,11 @@ spec:
           livenessProbe:
           {{- if gt (.Values.router.epp.replicas | int) 1 }}
             grpc:
-              port: {{ $grpcHealthPort }}
+              port: {{ .Values.router.epp.grpcHealthPort }}
               service: liveness
           {{- else }}
             grpc:
-              port: {{ $grpcHealthPort }}
+              port: {{ .Values.router.epp.grpcHealthPort }}
               service: inference-extension
           {{- end }}
             initialDelaySeconds: 5
@@ -181,11 +199,11 @@ spec:
           readinessProbe:
           {{- if gt (.Values.router.epp.replicas | int) 1 }}
             grpc:
-              port: {{ $grpcHealthPort }}
+              port: {{ .Values.router.epp.grpcHealthPort }}
               service: readiness
           {{- else }}
             grpc:
-              port: {{ $grpcHealthPort }}
+              port: {{ .Values.router.epp.grpcHealthPort }}
               service: inference-extension
           {{- end }}
             periodSeconds: 2
