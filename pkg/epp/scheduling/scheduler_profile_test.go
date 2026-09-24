@@ -33,6 +33,9 @@ import (
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
+	attrconcurrency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
+	celcombiner "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/combiner/cel"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/picker/minscore"
 )
 
 func TestSchedulePlugins(t *testing.T) {
@@ -934,4 +937,130 @@ func findEndpoints(endpoints []fwksched.Endpoint, names ...k8stypes.NamespacedNa
 		}
 	}
 	return res
+}
+
+// constantCombiner assigns every endpoint the same fixed score, ignoring the
+// scorer results. It lets a test assert that a configured combiner overrides
+// the default weighted-sum combination.
+type constantCombiner struct {
+	typedName fwkplugin.TypedName
+	value     float64
+}
+
+func (c *constantCombiner) TypedName() fwkplugin.TypedName { return c.typedName }
+
+func (c *constantCombiner) Combine(_ context.Context, _ []fwksched.ScorerResult,
+	endpoints []fwksched.Endpoint,
+) map[fwksched.Endpoint]float64 {
+	out := make(map[fwksched.Endpoint]float64, len(endpoints))
+	for _, e := range endpoints {
+		out[e] = c.value
+	}
+	return out
+}
+
+// TestRunWithCombinerOverride verifies that a configured Combiner replaces the
+// default weighted-sum combination: the picker sees the combiner's output, not
+// the scorer-weighted sum.
+func TestRunWithCombinerOverride(t *testing.T) {
+	scorer := &testPlugin{
+		TypeRes:   "scorer",
+		ScoreRes:  0.5,
+		FilterRes: []k8stypes.NamespacedName{{Name: "pod1"}},
+	}
+	pickerPlugin := &testPlugin{TypeRes: "picker", PickRes: k8stypes.NamespacedName{Name: "pod1"}}
+
+	profile := NewSchedulerProfile().
+		WithScorers(NewWeightedScorer(scorer, 1)).
+		WithPicker(pickerPlugin).
+		WithCombiner(&constantCombiner{typedName: fwkplugin.TypedName{Type: "constant", Name: "constant"}, value: 0.9})
+
+	input := []fwksched.Endpoint{
+		fwksched.NewEndpoint(&fwkdl.EndpointMetadata{ID: k8stypes.NamespacedName{Name: "pod1"}}, nil, nil),
+	}
+	request := &fwksched.InferenceRequest{TargetModel: "test-model", RequestID: uuid.NewString()}
+
+	if _, err := profile.Run(context.Background(), request, input); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The combiner assigns 0.9 regardless of the scorer's 0.5*1 weighted sum.
+	if pickerPlugin.WinnerEndpointScore != 0.9 {
+		t.Errorf("expected combiner-produced score 0.9, got %v", pickerPlugin.WinnerEndpointScore)
+	}
+}
+
+// TestAddPluginsDuplicateCombiner verifies AddPlugins rejects a second Combiner
+// in the same profile, mirroring the duplicate-picker guard.
+func TestAddPluginsDuplicateCombiner(t *testing.T) {
+	profile := NewSchedulerProfile()
+	err := profile.AddPlugins(
+		&constantCombiner{typedName: fwkplugin.TypedName{Type: "constant", Name: "c1"}},
+		&constantCombiner{typedName: fwkplugin.TypedName{Type: "constant", Name: "c2"}},
+	)
+	if err == nil {
+		t.Fatal("expected error for duplicate combiner, got nil")
+	}
+	if !strings.Contains(err.Error(), "already have a registered combiner") {
+		t.Errorf("error %q does not mention duplicate combiner", err.Error())
+	}
+}
+
+// rawSignalsEndpoint builds an endpoint with typed producer state and a
+// metrics snapshot, without scorer output.
+func rawSignalsEndpoint(name string, uncached int64, running, waiting int) fwksched.Endpoint {
+	attrs := fwkdl.NewAttributes()
+	attrs.Put(attrconcurrency.UncachedRequestTokensDataKey.String(),
+		&attrconcurrency.UncachedRequestTokens{Tokens: uncached})
+	return fwksched.NewEndpoint(&fwkdl.EndpointMetadata{ID: k8stypes.NamespacedName{Name: name}},
+		&fwkdl.Metrics{RunningRequestsSize: running, WaitingQueueSize: waiting}, attrs)
+}
+
+// TestRunRawProductChain runs a raw-magnitude product on the real chain with
+// zero scorers: uncached tokens times batch size plus one, min picker.
+// Nothing on this path clamps or normalizes.
+func TestRunRawProductChain(t *testing.T) {
+	combiner, err := celcombiner.NewCombiner("cel", celcombiner.Parameters{
+		Expression: "data['inflight-load-producer']['tokens_uncached'] * " +
+			"(data['metrics']['requests_running'] + data['metrics']['requests_waiting'] + 1.0)",
+	})
+	if err != nil {
+		t.Fatalf("failed to build combiner: %v", err)
+	}
+
+	// pod1: 100 * (2 + 2 + 1) = 500; pod2: 50 * (5 + 3 + 1) = 450.
+	input := []fwksched.Endpoint{
+		rawSignalsEndpoint("pod1", 100, 2, 2),
+		rawSignalsEndpoint("pod2", 50, 5, 3),
+	}
+	profile := NewSchedulerProfile().
+		WithCombiner(combiner).
+		WithPicker(minscore.NewMinScorePicker(1))
+	request := &fwksched.InferenceRequest{TargetModel: "test-model", RequestID: uuid.NewString()}
+
+	result, err := profile.Run(context.Background(), request, input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.TargetEndpoints) != 1 {
+		t.Fatalf("expected 1 target endpoint, got %d", len(result.TargetEndpoints))
+	}
+	if got := result.TargetEndpoints[0].GetMetadata().ID.Name; got != "pod2" {
+		t.Errorf("expected minimum pod2, got %s", got)
+	}
+	for _, candidate := range result.ScoredCandidates {
+		name := candidate.GetMetadata().ID.Name
+		switch name {
+		case "pod1":
+			if candidate.Score != 500 {
+				t.Errorf("pod1 score = %v, want raw product 500", candidate.Score)
+			}
+		case "pod2":
+			if candidate.Score != 450 {
+				t.Errorf("pod2 score = %v, want raw product 450", candidate.Score)
+			}
+		default:
+			t.Errorf("unexpected candidate %s", name)
+		}
+	}
 }

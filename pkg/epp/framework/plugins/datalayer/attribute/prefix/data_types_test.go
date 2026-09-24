@@ -132,3 +132,18 @@ func TestPrefixCacheMatchInfo_MM(t *testing.T) {
 		})
 	}
 }
+
+func TestPrefixCacheMatchInfoNumericFields(t *testing.T) {
+	info := NewPrefixCacheMatchInfo(5, 10, 16).WithCachedBlockCount(8)
+	assert.Equal(t, map[string]float64{
+		"blocks_matched":    5,
+		"blocks_total":      10,
+		"tokens_cached":     128,
+		"tokens_block_size": 16,
+	}, info.NumericFields())
+}
+
+func TestPrefixCacheMatchInfoNumericFieldsOfNil(t *testing.T) {
+	var info *PrefixCacheMatchInfo
+	assert.Nil(t, info.NumericFields())
+}

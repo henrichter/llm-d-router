@@ -111,6 +111,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/vertexai"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/vllmgrpc"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/vllmhttp"
+	celcombiner "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/combiner/cel"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/filter/bylabel"
 	endpointattributefilter "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/filter/endpointattribute"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/filter/prefixcacheaffinity"
@@ -119,6 +120,7 @@ import (
 	topologyaffinityfilter "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/filter/topologyaffinity"
 	utilizationfilter "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/filter/utilization"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/picker/maxscore"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/picker/minscore"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/picker/random"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/picker/weightedrandom"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/profilehandler/dataparallel"
@@ -632,6 +634,8 @@ func (r *Runner) registerInTreePlugins() {
 	fwkplugin.Register(mmcacheaffinity.Type, fwkplugin.StabilityBeta, mmcacheaffinity.Factory)
 	fwkplugin.Register(preciseproducer.PluginType, fwkplugin.StabilityBeta, preciseproducer.PluginFactory)
 	// Alpha
+	fwkplugin.Register(minscore.MinScorePickerType, fwkplugin.StabilityAlpha, minscore.MinScorePickerFactory)
+	fwkplugin.Register(celcombiner.CombinerType, fwkplugin.StabilityAlpha, celcombiner.CombinerFactory)
 	fwkplugin.Register(headerprofile.HeaderProfileHandlerType, fwkplugin.StabilityAlpha, headerprofile.HeaderProfileHandlerFactory)
 	fwkplugin.Register(endpointattribute.EndpointAttributeScorerType, fwkplugin.StabilityAlpha, endpointattribute.EndpointAttributeScorerFactory)
 	fwkplugin.Register(topologyaffinityscorer.ScorerType, fwkplugin.StabilityAlpha, topologyaffinityscorer.Factory)

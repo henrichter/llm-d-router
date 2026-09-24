@@ -82,3 +82,25 @@ func (u *UncachedRequestTokens) Clone() fwkdl.Cloneable {
 	cp := *u
 	return &cp
 }
+
+func (u *UncachedRequestTokens) NumericFields() map[string]float64 {
+	if u == nil {
+		return nil
+	}
+	return map[string]float64{"tokens_uncached": float64(u.Tokens)}
+}
+
+func (l *InFlightLoad) NumericFields() map[string]float64 {
+	if l == nil {
+		return nil
+	}
+	return map[string]float64{
+		"tokens_inflight":   float64(l.Tokens),
+		"requests_inflight": float64(l.Requests),
+	}
+}
+
+var (
+	_ fwkdl.NumericView = (*InFlightLoad)(nil)
+	_ fwkdl.NumericView = (*UncachedRequestTokens)(nil)
+)

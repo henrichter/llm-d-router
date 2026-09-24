@@ -25,6 +25,13 @@ type Cloneable interface {
 	Clone() Cloneable
 }
 
+// NumericView presents an attribute value's numeric fields to
+// expression-driven consumers. Keys are signal names scoped by the caller;
+// values are raw magnitudes, never normalized.
+type NumericView interface {
+	NumericFields() map[string]float64
+}
+
 // DynamicAttribute wraps a getter function to allow on-demand resolution of attributes.
 type DynamicAttribute struct {
 	Get func() Cloneable

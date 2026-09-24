@@ -124,3 +124,20 @@ func (p *PrefixCacheMatchInfo) Clone() fwkdl.Cloneable {
 	}
 	return clone
 }
+
+// NumericFields reports tokens_cached from the unweighted cached-block count;
+// blocks_matched may carry tier-weighted ranking values from the precise
+// producer.
+func (p *PrefixCacheMatchInfo) NumericFields() map[string]float64 {
+	if p == nil {
+		return nil
+	}
+	return map[string]float64{
+		"blocks_matched":    float64(p.matchBlocks),
+		"blocks_total":      float64(p.totalBlocks),
+		"tokens_cached":     float64(p.cachedBlockCount * p.blockSizeTokens),
+		"tokens_block_size": float64(p.blockSizeTokens),
+	}
+}
+
+var _ fwkdl.NumericView = (*PrefixCacheMatchInfo)(nil)

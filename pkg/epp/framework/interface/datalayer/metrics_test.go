@@ -60,3 +60,29 @@ func TestMetricsToString(t *testing.T) {
 	var none *Metrics
 	assert.Equal(t, "", none.String())
 }
+
+func TestMetricsNumericFields(t *testing.T) {
+	m := &Metrics{
+		RunningRequestsSize:     2,
+		WaitingQueueSize:        3,
+		KVCacheUsagePercent:     0.5,
+		CacheBlockSize:          16,
+		CacheNumBlocks:          100,
+		KvCacheMaxTokenCapacity: 1600,
+		MaxActiveModels:         4,
+	}
+	assert.Equal(t, map[string]float64{
+		"requests_running":  2,
+		"requests_waiting":  3,
+		"cache_usage":       0.5,
+		"cache_block_size":  16,
+		"cache_max_blocks":  100,
+		"cache_max_tokens":  1600,
+		"models_max_active": 4,
+	}, m.NumericFields())
+}
+
+func TestMetricsNumericFieldsOfNil(t *testing.T) {
+	var m *Metrics
+	assert.Nil(t, m.NumericFields())
+}

@@ -80,3 +80,22 @@ func (m *Metrics) Clone() *Metrics {
 		UpdateTime:              m.UpdateTime,
 	}
 }
+
+// NumericFields reports raw magnitudes; derived combinations (e.g. total
+// batch size) belong in the expression, not here.
+func (m *Metrics) NumericFields() map[string]float64 {
+	if m == nil {
+		return nil
+	}
+	return map[string]float64{
+		"requests_running":  float64(m.RunningRequestsSize),
+		"requests_waiting":  float64(m.WaitingQueueSize),
+		"cache_usage":       m.KVCacheUsagePercent,
+		"cache_block_size":  float64(m.CacheBlockSize),
+		"cache_max_blocks":  float64(m.CacheNumBlocks),
+		"cache_max_tokens":  float64(m.KvCacheMaxTokenCapacity),
+		"models_max_active": float64(m.MaxActiveModels),
+	}
+}
+
+var _ NumericView = (*Metrics)(nil)

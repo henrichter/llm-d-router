@@ -50,9 +50,10 @@ func NewSchedulerProfile() *SchedulerProfile {
 
 // SchedulerProfile provides a profile configuration for the scheduler which influence routing decisions.
 type SchedulerProfile struct {
-	filters []fwksched.Filter
-	scorers []*WeightedScorer
-	picker  fwksched.Picker
+	filters  []fwksched.Filter
+	scorers  []*WeightedScorer
+	picker   fwksched.Picker
+	combiner fwksched.Combiner
 }
 
 // WithFilters sets the given filter plugins as the Filter plugins.
@@ -73,6 +74,13 @@ func (p *SchedulerProfile) WithScorers(scorers ...*WeightedScorer) *SchedulerPro
 // if the SchedulerProfile has Picker plugin, this call replaces the existing plugin with the given one.
 func (p *SchedulerProfile) WithPicker(picker fwksched.Picker) *SchedulerProfile {
 	p.picker = picker
+	return p
+}
+
+// WithCombiner sets the given combiner plugin as the Combiner plugin.
+// if the SchedulerProfile has a Combiner plugin, this call replaces the existing plugin with the given one.
+func (p *SchedulerProfile) WithCombiner(combiner fwksched.Combiner) *SchedulerProfile {
+	p.combiner = combiner
 	return p
 }
 
@@ -98,6 +106,12 @@ func (p *SchedulerProfile) AddPlugins(pluginObjects ...plugin.Plugin) error {
 			}
 			p.picker = picker
 		}
+		if combiner, ok := plugin.(fwksched.Combiner); ok {
+			if p.combiner != nil {
+				return fmt.Errorf("failed to set '%s' as combiner, already have a registered combiner plugin '%s'", combiner.TypedName(), p.combiner.TypedName())
+			}
+			p.combiner = combiner
+		}
 	}
 	return nil
 }
@@ -112,10 +126,16 @@ func (p *SchedulerProfile) String() string {
 		scorerNames[i] = fmt.Sprintf("%s: %f", scorer.TypedName(), scorer.Weight())
 	}
 
+	combinerName := weightedSumCombinerType
+	if p.combiner != nil {
+		combinerName = p.combiner.TypedName().String()
+	}
+
 	return fmt.Sprintf(
-		"{Filters: [%s], Scorers: [%s], Picker: %s}",
+		"{Filters: [%s], Scorers: [%s], Combiner: %s, Picker: %s}",
 		strings.Join(filterNames, ", "),
 		strings.Join(scorerNames, ", "),
+		combinerName,
 		p.picker.TypedName(),
 	)
 }
@@ -128,9 +148,15 @@ func (p *SchedulerProfile) Run(ctx context.Context, request *fwksched.InferenceR
 		return nil, errcommon.Error{Code: errcommon.Internal, Msg: "no endpoints available for the given request"}
 	}
 	// if we got here, there is at least one endpoint to score
-	weightedScorePerEndpoint := p.runScorerPlugins(ctx, request, endpoints)
+	scorerResults := p.runScorerPlugins(ctx, request, endpoints)
 
-	result := p.runPickerPlugin(ctx, request, weightedScorePerEndpoint)
+	combiner := p.combiner
+	if combiner == nil {
+		combiner = defaultWeightedSumCombiner
+	}
+	combinedScorePerEndpoint := combiner.Combine(ctx, scorerResults, endpoints)
+
+	result := p.runPickerPlugin(ctx, request, combinedScorePerEndpoint)
 
 	return result, nil
 }
@@ -164,7 +190,7 @@ func (p *SchedulerProfile) runFilterPlugins(ctx context.Context, request *fwksch
 	return filteredEndpoints
 }
 
-func (p *SchedulerProfile) runScorerPlugins(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) map[fwksched.Endpoint]float64 {
+func (p *SchedulerProfile) runScorerPlugins(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.ScorerResult {
 	logger := log.FromContext(ctx)
 	logger.V(logutil.DEBUG).Info("Before running scorer plugins", "endpoints", endpoints)
 
@@ -188,10 +214,9 @@ func (p *SchedulerProfile) runScorerPlugins(ctx context.Context, request *fwksch
 		span.SetAttributes(requestSpanAttributes(request)...)
 	}
 
-	weightedScorePerEndpoint := make(map[fwksched.Endpoint]float64, len(endpoints))
-	for _, endpoint := range endpoints {
-		weightedScorePerEndpoint[endpoint] = float64(0) // initialize weighted score per endpoint with 0 value
-	}
+	// Collect each scorer's raw scores in chain order, leaving combination to
+	// the profile's Combiner.
+	results := make([]fwksched.ScorerResult, 0, len(p.scorers))
 	// Cache the debug logger and its enabled state once. The per-endpoint Info
 	// call below evaluates and boxes its variadic args even when the verbosity
 	// gate would suppress output; on a 100-endpoint, 4-scorer fleet that line
@@ -201,21 +226,24 @@ func (p *SchedulerProfile) runScorerPlugins(ctx context.Context, request *fwksch
 	debug := logger.V(logutil.DEBUG)
 	debugEnabled := debug.Enabled()
 
-	// Iterate through each scorer in the chain and accumulate the weighted scores.
 	for _, scorer := range p.scorers {
 		logger.V(logutil.VERBOSE).Info("Running scorer plugin", "plugin", scorer.TypedName())
 		scores := runScorer(ctx, tracer, tracingActive, scorer, request, endpoints)
-		for endpoint, score := range scores { // weight is relative to the sum of weights
-			if debugEnabled {
+		if debugEnabled {
+			for endpoint, score := range scores {
 				debug.Info("Calculated score", "plugin", scorer.TypedName(), "endpoint", endpoint.GetMetadata().ID, "score", score)
 			}
-			weightedScorePerEndpoint[endpoint] += enforceScoreRange(score) * scorer.Weight()
 		}
+		results = append(results, fwksched.ScorerResult{
+			Name:   scorer.TypedName().Name,
+			Weight: scorer.Weight(),
+			Scores: scores,
+		})
 		debug.Info("Completed running scorer plugin successfully", "plugin", scorer.TypedName())
 	}
 	logger.V(logutil.VERBOSE).Info("Completed running scorer plugins successfully")
 
-	return weightedScorePerEndpoint
+	return results
 }
 
 // runScorer invokes a single weighted scorer and records its latency metric.

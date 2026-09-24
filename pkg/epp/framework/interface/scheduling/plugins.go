@@ -76,3 +76,23 @@ type Picker interface {
 	plugin.Plugin
 	Pick(ctx context.Context, scoredPods []*ScoredEndpoint) *ProfileRunResult
 }
+
+// ScorerResult pairs a scorer's per-endpoint score map with the scorer's
+// configured name and weight. A profile's scorer chain produces one
+// ScorerResult per scorer, in chain order, which the Combiner folds into a
+// single score per endpoint.
+type ScorerResult struct {
+	Name   string
+	Weight float64
+	Scores map[Endpoint]float64
+}
+
+// Combiner folds the per-scorer results of a profile into a single score per
+// endpoint for the Picker. results is ordered by the profile's scorer chain;
+// an implementation may also index scorers by ScorerResult.Name. A Combiner is
+// orientation-neutral: whether a higher or lower combined score wins is the
+// Picker's concern.
+type Combiner interface {
+	plugin.Plugin
+	Combine(ctx context.Context, results []ScorerResult, endpoints []Endpoint) map[Endpoint]float64
+}
